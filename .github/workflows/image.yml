@@ -133,7 +133,8 @@ jobs:
           path: sbom.spdx.json
           retention-days: 1
 
-      - uses: sigstore/cosign-installer@v4
+      # No floating v4 tag exists, only exact versions; Dependabot bumps it
+      - uses: sigstore/cosign-installer@v4.1.2
         if: github.event_name != 'pull_request'
 
       - name: Sign image (keyless)
@@ -144,7 +145,7 @@ jobs:
 
       - name: Scan for vulnerabilities
         if: github.event_name != 'pull_request'
-        uses: aquasecurity/trivy-action@0.36.0
+        uses: aquasecurity/trivy-action@v0.36.0
         env:
           TRIVY_USERNAME: ${{ github.actor }}
           TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
