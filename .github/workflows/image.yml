@@ -1,0 +1,244 @@
+# Build the fio image, push it to GHCR and add supply-chain metadata:
+# - BuildKit SBOM + SLSA provenance (mode=max), stored in the image index
+# - GitHub artifact attestations for provenance and SBOM (verify with `gh attestation verify`)
+# - keyless cosign signature (verify with `cosign verify`)
+# - Trivy vulnerability scan, uploaded to the repository's code scanning alerts
+# Pull requests only build the image; nothing is pushed, signed or attested.
+name: fio-image
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # Weekly rebuild to pick up UBI security updates
+    - cron: "17 4 * * 1"
+
+concurrency:
+  group: fio-image-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  build:
+    # Pinned instead of ubuntu-latest so the runner OS only changes on purpose
+    runs-on: ubuntu-26.04
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      fio-version: ${{ steps.fio.outputs.version }}
+    permissions:
+      contents: read
+      packages: write          # push to GHCR
+      id-token: write          # keyless signing (cosign, attestations)
+      attestations: write      # GitHub artifact attestations
+      security-events: write   # upload Trivy SARIF
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Read fio version from Dockerfile
+        id: fio
+        run: echo "version=$(sed -n 's/^ARG FIO_VERSION=//p' Dockerfile)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image tags and labels
+        id: meta
+        uses: docker/metadata-action@v6
+        env:
+          # GHCR shows the description from the index annotation
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
+        with:
+          images: ${{ env.IMAGE }}
+          # latest only from the explicit rule below, never implicitly from a semver tag
+          flavor: latest=false
+          tags: |
+            type=raw,value=${{ steps.fio.outputs.version }},enable={{is_default_branch}}
+            type=sha,prefix=${{ steps.fio.outputs.version }}-
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=ref,event=pr
+          labels: |
+            org.opencontainers.image.title=fio-cloud-tests
+            org.opencontainers.image.description=fio ${{ steps.fio.outputs.version }} with realistic database workloads for comparing cloud disks
+          annotations: |
+            org.opencontainers.image.description=fio ${{ steps.fio.outputs.version }} with realistic database workloads for comparing cloud disks
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          sbom: true
+          provenance: mode=max
+          pull: true
+          # The scheduled rebuild must not reuse the cached microdnf layer, or it
+          # would not pick up security updates
+          no-cache: ${{ github.event_name == 'schedule' }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Generate SBOM (SPDX)
+        if: github.event_name != 'pull_request'
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+          registry-username: ${{ github.actor }}
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+
+      - name: Attest build provenance
+        if: github.event_name != 'pull_request'
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Attest SBOM
+        if: github.event_name != 'pull_request'
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          sbom-path: sbom.spdx.json
+          push-to-registry: true
+
+      - name: Keep SBOM for the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.spdx.json
+          retention-days: 1
+
+      - uses: sigstore/cosign-installer@v4
+        if: github.event_name != 'pull_request'
+
+      - name: Sign image (keyless)
+        if: github.event_name != 'pull_request'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+
+      - name: Scan for vulnerabilities
+        if: github.event_name != 'pull_request'
+        uses: aquasecurity/trivy-action@0.36.0
+        env:
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          image-ref: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+          format: sarif
+          output: trivy.sarif
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          # Report only; findings show up under Security -> Code scanning
+          exit-code: "0"
+
+      - name: Upload scan results
+        if: github.event_name != 'pull_request'
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy.sarif
+          category: trivy-image
+
+  # GitHub release with a changelog from the commits since the previous v* tag.
+  # Only this job can write repository contents.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0   # full history and tags for the changelog
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: sbom
+
+      - name: Write release notes
+        env:
+          TAG: ${{ github.ref_name }}
+          DIGEST: ${{ needs.build.outputs.digest }}
+          FIO_VERSION: ${{ needs.build.outputs.fio-version }}
+          REPO: ${{ github.repository }}
+        run: |
+          prev="$(git describe --tags --abbrev=0 --match 'v*' "${TAG}^" 2>/dev/null || true)"
+          range="${prev:+${prev}..}${TAG}"
+          commits="$(git log --no-merges --format='- %s (%h)' "$range")"
+          # Conventional-commit prefixes are grouped, everything else goes to "Other"
+          section() {  # <title> <grep options...>
+            title="$1"; shift
+            lines="$(printf '%s\n' "$commits" | grep "$@" || true)"
+            if [ -n "$lines" ]; then printf '### %s\n\n%s\n\n' "$title" "$lines"; fi
+          }
+          {
+            if [ -n "$prev" ]; then
+              printf '## Changes since %s\n\n' "$prev"
+            else
+              printf '## Changes\n\n'
+            fi
+            section Features -E '^- feat(\(.+\))?!?:'
+            section Fixes -E '^- fix(\(.+\))?!?:'
+            section Other -vE '^- (feat|fix)(\(.+\))?!?:'
+            cat <<EOF
+          ## Image
+
+          fio ${FIO_VERSION}, built from this tag:
+
+          \`\`\`sh
+          podman pull ${IMAGE}:${TAG#v}
+          podman pull ${IMAGE}@${DIGEST}
+          \`\`\`
+
+          Verify signature and attestations:
+
+          \`\`\`sh
+          gh attestation verify oci://${IMAGE}@${DIGEST} --owner ${REPO%%/*}
+          cosign verify ${IMAGE}@${DIGEST} \\
+            --certificate-identity-regexp '^https://github.com/${REPO}/\.github/workflows/image\.yml@' \\
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+          \`\`\`
+
+          The SBOM (SPDX) is attached to this release.
+          EOF
+            if [ -n "$prev" ]; then
+              printf '\n**Full diff:** https://github.com/%s/compare/%s...%s\n' "$REPO" "$prev" "$TAG"
+            fi
+          } > notes.md
+          cat notes.md
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          # Tags with a suffix (v1.2.0-rc1) become pre-releases
+          case "$TAG" in *-*) pre="--prerelease" ;; *) pre="" ;; esac
+          gh release create "$TAG" sbom.spdx.json \
+            --title "$TAG" --notes-file notes.md --verify-tag $pre

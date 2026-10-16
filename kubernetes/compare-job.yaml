@@ -1,0 +1,67 @@
+# Comparison run A (mirrored) vs. B (non-mirrored), runs under restricted-v2.
+# Example for Google; for Azure: swap storageClassNames, mount /data/zrs and
+# /data/lrs, args: ["compare", "/data/zrs", "/data/lrs"].
+# Results: in the pod log and on the PVC fio-results; download them via the
+# fio-results Deployment (results-deployment.yaml) with oc rsync / oc cp.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: fio-data-a
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: fio-pd-balanced-regional
+  resources: { requests: { storage: 200Gi } }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: fio-data-b
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: fio-pd-balanced-zonal
+  resources: { requests: { storage: 200Gi } }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: fio-results
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 1Gi } }
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: fio-compare
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels: { app: fio-compare }
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: fio
+          image: ghcr.io/git001/fio-cloud-tests:3.43
+          args: ["compare", "/data/regional", "/data/normal"]
+          env:
+            - { name: RUNTIME, value: "300" }
+            - { name: BASE_RUNTIME, value: "60" }
+          resources:
+            # The memory limit also caps the page cache (cgroup v2):
+            # keep it small so buffered I/O really hits the disk.
+            requests: { cpu: "4", memory: 4Gi }
+            limits: { memory: 4Gi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities: { drop: [ALL] }
+            seccompProfile: { type: RuntimeDefault }
+          volumeMounts:
+            - { name: data-a, mountPath: /data/regional }
+            - { name: data-b, mountPath: /data/normal }
+            - { name: results, mountPath: /results }
+      volumes:
+        - { name: data-a, persistentVolumeClaim: { claimName: fio-data-a } }
+        - { name: data-b, persistentVolumeClaim: { claimName: fio-data-b } }
+        - { name: results, persistentVolumeClaim: { claimName: fio-results } }

@@ -1,0 +1,6 @@
+# Only Dockerfile, jobs/, report/ and run.sh are needed for the image
+.git/
+.github/
+results/
+kubernetes/
+*.md

@@ -1,0 +1,23 @@
+# AKS / ARO (disk.csi.azure.com)
+# ZRS exists for Premium SSD and Standard SSD, not for Standard HDD.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: fio-premium-zrs
+provisioner: disk.csi.azure.com
+parameters:
+  skuName: Premium_ZRS
+  cachingMode: None
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: fio-premium-lrs
+provisioner: disk.csi.azure.com
+parameters:
+  skuName: Premium_LRS
+  cachingMode: None
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true

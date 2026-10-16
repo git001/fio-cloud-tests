@@ -1,0 +1,6 @@
+# actionlint's built-in list of GitHub-hosted runner labels lags behind GitHub.
+# ubuntu-26.04 has been generally available since 2026-09-17; remove this entry
+# once actionlint knows the label.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04

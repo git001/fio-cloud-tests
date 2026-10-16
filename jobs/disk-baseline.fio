@@ -1,0 +1,80 @@
+; Raw disk characteristics - the most important file for comparing mirrored vs.
+; non-mirrored storage. Synchronous cross-zone replication mainly costs write
+; latency at QD1 and flush latency (fdatasync); high queue depth and large
+; blocks show whether throughput is capped.
+; Only psync and libaio - both work unprivileged on OpenShift.
+
+[global]
+directory=${TEST_DIR}
+filename=baseline.dat
+size=${BASE_SIZE}
+direct=1
+time_based=1
+runtime=${BASE_RUNTIME}
+ramp_time=${RAMP}
+group_reporting=1
+lat_percentiles=1
+percentile_list=50:90:99:99.9:99.99
+randrepeat=0
+norandommap=1
+
+; Write the whole file once before measuring. Otherwise fio only fallocates it for
+; the first (write) job, and reads of never-written ranges return zeros without
+; touching the disk (seen: 2 us read p50 instead of 64 us). Not a measurement;
+; run.sh drops jobs named "precondition" from the results.
+[precondition]
+ioengine=libaio
+iodepth=8
+rw=write
+bs=1m
+time_based=0
+runtime=0
+ramp_time=0
+
+; Commit latency: what every database pays per transaction
+[qd1-write-4k-fdatasync]
+stonewall
+ioengine=psync
+rw=randwrite
+bs=4k
+fdatasync=1
+
+[qd1-randwrite-4k]
+stonewall
+ioengine=psync
+rw=randwrite
+bs=4k
+
+[qd1-randread-4k]
+stonewall
+ioengine=psync
+rw=randread
+bs=4k
+
+[qd32-randwrite-4k]
+stonewall
+ioengine=libaio
+iodepth=32
+rw=randwrite
+bs=4k
+
+[qd32-randread-4k]
+stonewall
+ioengine=libaio
+iodepth=32
+rw=randread
+bs=4k
+
+[seq-write-1m]
+stonewall
+ioengine=libaio
+iodepth=8
+rw=write
+bs=1m
+
+[seq-read-1m]
+stonewall
+ioengine=libaio
+iodepth=8
+rw=read
+bs=1m

@@ -1,0 +1,23 @@
+# GKE / OpenShift on GCP (pd.csi.storage.gke.io)
+# Same disk type and same size for both - performance scales with size.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: fio-pd-balanced-regional
+provisioner: pd.csi.storage.gke.io
+parameters:
+  type: pd-balanced
+  replication-type: regional-pd
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: fio-pd-balanced-zonal
+provisioner: pd.csi.storage.gke.io
+parameters:
+  type: pd-balanced
+  replication-type: none
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true

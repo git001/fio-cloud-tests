@@ -1,0 +1,76 @@
+; MongoDB (WiredTiger) on SSD
+; Model: compressed pages of variable size (4k-64k), synchronous reads,
+; journal = append + fsync (j:true / commitIntervalMs), checkpoint every 60 s
+; as a write burst (thinktime creates the pause between bursts).
+;
+; Phase 1: isolated journal latency
+; Phase 2: mixed load, RUNTIME >= 300 s so that several checkpoints are included
+
+[global]
+directory=${TEST_DIR}
+ioengine=psync
+time_based=1
+runtime=${RUNTIME}
+ramp_time=${RAMP}
+group_reporting=1
+lat_percentiles=1
+percentile_list=50:90:99:99.9:99.99
+randrepeat=0
+norandommap=1
+
+; ---------- Phase 1 ----------
+[mongo-journal-isolated]
+stonewall
+filename=mongo_journal.dat
+size=${MONGO_JOURNAL_SIZE}
+rw=write
+bssplit=4k/30:8k/25:16k/20:32k/15:128k/10
+direct=0
+fdatasync=1
+
+; ---------- Phase 2 ----------
+; Queries: index and collection page reads that miss the WT cache
+[mongo-reads]
+stonewall
+new_group
+filename=mongo_data.dat
+size=${MONGO_DATA_SIZE}
+rw=randread
+bssplit=4k/35:8k/25:16k/20:32k/15:64k/5
+direct=1
+numjobs=16
+random_distribution=zipf:1.1
+
+; Eviction writes from application threads (continuous, low)
+[mongo-eviction]
+new_group
+filename=mongo_data.dat
+size=${MONGO_DATA_SIZE}
+rw=randwrite
+bssplit=4k/30:8k/30:16k/25:32k/15
+direct=0
+rate=8m
+
+; Checkpoint: ~1 GiB burst with fsync, then 55 s pause
+[mongo-checkpoint]
+new_group
+filename=mongo_data.dat
+size=${MONGO_DATA_SIZE}
+rw=randwrite
+bs=16k
+direct=0
+rate=200m
+thinktime=55s
+thinktime_blocks=65536
+fsync=65536
+
+; Journal under load
+[mongo-journal]
+new_group
+filename=mongo_journal.dat
+size=${MONGO_JOURNAL_SIZE}
+rw=write
+bssplit=4k/30:8k/25:16k/20:32k/15:128k/10
+direct=0
+fdatasync=1
+rate_iops=500

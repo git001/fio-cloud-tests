@@ -1,0 +1,76 @@
+; PostgreSQL on SSD
+; Model: 8k pages, backends read synchronously (psync), WAL = buffered pwrite + fdatasync
+; (wal_sync_method=fdatasync), checkpointer writes buffered random 8k and fsyncs at
+; the end, plus a sequential scan (io_combine_limit = 128k).
+; direct=1 for the backends simulates cache misses (shared_buffers/page cache).
+;
+; Phase 1: isolated WAL commit latency (equivalent to pg_test_fsync)
+; Phase 2: mixed OLTP load, everything in parallel, one report per component
+
+[global]
+directory=${TEST_DIR}
+ioengine=psync
+time_based=1
+runtime=${RUNTIME}
+ramp_time=${RAMP}
+group_reporting=1
+lat_percentiles=1
+percentile_list=50:90:99:99.9:99.99
+randrepeat=0
+norandommap=1
+
+; ---------- Phase 1 ----------
+[pg-wal-commit-isolated]
+stonewall
+filename=pg_wal.dat
+size=${PG_WAL_SIZE}
+rw=write
+bs=8k
+direct=0
+fdatasync=1
+
+; ---------- Phase 2 ----------
+; Client backends: 80/20 read/write, hot-set distribution (zipf)
+[pg-backends]
+stonewall
+new_group
+filename=pg_data.dat
+size=${PG_DATA_SIZE}
+rw=randrw
+rwmixread=80
+bs=8k
+direct=1
+numjobs=16
+random_distribution=zipf:0.9
+
+; WAL under load: group commits produce variable write sizes
+[pg-wal-writer]
+new_group
+filename=pg_wal.dat
+size=${PG_WAL_SIZE}
+rw=write
+bssplit=8k/40:16k/30:32k/20:64k/10
+direct=0
+fdatasync=1
+rate_iops=1000
+
+; Checkpointer: spread random writes, fsync every 16 MiB
+[pg-checkpointer]
+new_group
+filename=pg_data.dat
+size=${PG_DATA_SIZE}
+rw=randwrite
+bs=8k
+direct=0
+fsync=2048
+rate=32m
+
+; Seq scan / reporting query / autovacuum
+[pg-seqscan]
+new_group
+filename=pg_data.dat
+size=${PG_DATA_SIZE}
+rw=read
+bs=128k
+direct=1
+rate=150m

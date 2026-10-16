@@ -1,0 +1,46 @@
+# Keeps the results PVC mounted in an idle pod so the results can be downloaded:
+#   POD=$(oc get pod -l app=fio-results -o jsonpath='{.items[0].metadata.name}')
+#   oc rsync "$POD":/results/ ./results/     # needs rsync locally, falls back to tar otherwise
+#   oc cp "$POD":/results ./results          # needs only tar in the image
+# fio-results is ReadWriteOnce: while the Job is still running, this pod must run on
+# the same node, hence the pod affinity to the Job pod. After the Job has finished,
+# any node works.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fio-results
+spec:
+  replicas: 1
+  # Recreate instead of RollingUpdate: two pods cannot attach an RWO volume on different nodes
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: fio-results }
+  template:
+    metadata:
+      labels: { app: fio-results }
+    spec:
+      affinity:
+        podAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels: { app: fio-compare }
+                topologyKey: kubernetes.io/hostname
+      terminationGracePeriodSeconds: 1
+      containers:
+        - name: results
+          image: ghcr.io/git001/fio-cloud-tests:3.43
+          command: ["sleep", "infinity"]
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { memory: 128Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities: { drop: [ALL] }
+            seccompProfile: { type: RuntimeDefault }
+          volumeMounts:
+            - { name: results, mountPath: /results }
+      volumes:
+        - { name: results, persistentVolumeClaim: { claimName: fio-results } }

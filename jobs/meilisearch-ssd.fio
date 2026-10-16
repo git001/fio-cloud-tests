@@ -1,0 +1,77 @@
+; Meilisearch on SSD
+; Model: LMDB (4k pages, mmap) - search requests cause random 4k page faults,
+; indexing writes dirty pages buffered and fsyncs when a large batch commits.
+; Plus temporary grenad files (sequential write and read) and storing the
+; update payloads (update_files).
+; direct=1 for reads simulates an index that does not fit into RAM.
+;
+; Phase 1: search load only
+; Phase 2: indexing in parallel with search load
+
+[global]
+directory=${TEST_DIR}
+ioengine=psync
+time_based=1
+runtime=${RUNTIME}
+ramp_time=${RAMP}
+group_reporting=1
+lat_percentiles=1
+percentile_list=50:90:99:99.9:99.99
+randrepeat=0
+norandommap=1
+
+; ---------- Phase 1 ----------
+[meili-search-isolated]
+stonewall
+filename=meili_data.mdb
+size=${MEILI_DATA_SIZE}
+rw=randread
+bs=4k
+direct=1
+numjobs=8
+random_distribution=zipf:1.2
+
+; ---------- Phase 2 ----------
+[meili-search]
+stonewall
+new_group
+filename=meili_data.mdb
+size=${MEILI_DATA_SIZE}
+rw=randread
+bs=4k
+direct=1
+numjobs=4
+random_distribution=zipf:1.2
+
+; LMDB commit: dirty pages + fsync every ~100 MiB
+[meili-index-commit]
+new_group
+filename=meili_data.mdb
+size=${MEILI_DATA_SIZE}
+rw=randwrite
+bs=4k
+direct=0
+fsync=25600
+rate=80m
+
+; grenad intermediate files of the extraction
+[meili-index-tmp]
+new_group
+filename=meili_tmp.dat
+size=${MEILI_TMP_SIZE}
+rw=rw
+rwmixread=50
+bs=1m
+direct=0
+rate=100m
+
+; Upload of document payloads (update_files)
+[meili-update-files]
+new_group
+filename=meili_update.dat
+size=${MEILI_TMP_SIZE}
+rw=write
+bs=1m
+direct=0
+end_fsync=1
+rate=20m

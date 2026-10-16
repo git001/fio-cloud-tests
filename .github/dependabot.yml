@@ -1,0 +1,12 @@
+# Keep the GitHub Actions in the workflows up to date.
+# The Dockerfile base images use ${EL} in their tags, which Dependabot cannot parse;
+# they are refreshed by the weekly scheduled rebuild instead.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

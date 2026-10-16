@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>fio comparison</title>
+<style>
+  /* Color tokens; dark values are declared for the OS setting and for data-theme */
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7;
+    --surface: #fcfcfb;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted: #898781;
+    --grid: #e1e0d9;
+    --axis: #c3c2b7;
+    --border: rgba(11, 11, 11, 0.10);
+    --noise-band: #f0efec;
+    --worse: #e34948;
+    --better: #2a78d6;
+    --neutral: #898781;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --page: #0d0d0d;
+      --surface: #1a1a19;
+      --text-primary: #f0efec;
+      --text-secondary: #c3c2b7;
+      --text-muted: #898781;
+      --grid: #2c2c2a;
+      --axis: #383835;
+      --border: rgba(255, 255, 255, 0.10);
+      --noise-band: #383835;
+      --worse: #e66767;
+      --better: #3987e5;
+      --neutral: #898781;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page: #0d0d0d;
+    --surface: #1a1a19;
+    --text-primary: #f0efec;
+    --text-secondary: #c3c2b7;
+    --text-muted: #898781;
+    --grid: #2c2c2a;
+    --axis: #383835;
+    --border: rgba(255, 255, 255, 0.10);
+    --noise-band: #383835;
+    --worse: #e66767;
+    --better: #3987e5;
+    --neutral: #898781;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--text-primary);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 22px; margin: 0 0 4px; font-weight: 650; }
+  h2 { font-size: 17px; margin: 0 0 2px; font-weight: 600; }
+  h3 { font-size: 14px; margin: 0; font-weight: 600; }
+  .sub { color: var(--text-secondary); margin: 0; }
+  .muted { color: var(--text-muted); font-size: 12px; }
+
+  .controls {
+    display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center;
+    margin: 20px 0; padding: 12px 16px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  }
+  .controls label { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+  .legend { display: flex; flex-wrap: wrap; gap: 16px; color: var(--text-secondary); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .swatch { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-bottom: 28px; }
+  .tile {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .tile .label { color: var(--text-secondary); font-size: 13px; }
+  .tile .delta { font-size: 30px; font-weight: 650; margin: 4px 0 2px; display: flex; align-items: center; gap: 8px; }
+  .tile .delta .swatch { width: 10px; height: 10px; }
+  .tile .values { color: var(--text-secondary); font-size: 13px; }
+
+  section.workload {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 18px 16px 12px; margin-bottom: 20px;
+  }
+  .chart { margin-top: 16px; }
+  .chart svg { display: block; width: 100%; overflow: visible; }
+  .chart .axis-text { fill: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .chart .row-text { fill: var(--text-secondary); font-size: 12px; }
+  .chart .value-text { fill: var(--text-primary); font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .chart .hit { fill: transparent; cursor: default; outline: none; }
+  .chart .bar { transition: opacity 0.1s; }
+  .chart g.row:hover .bar, .chart g.row:focus-within .bar { opacity: 0.75; }
+  .empty { color: var(--text-muted); font-size: 13px; margin: 8px 0 0; }
+
+  details { margin-top: 14px; }
+  summary { cursor: pointer; color: var(--text-secondary); }
+  table { border-collapse: collapse; width: 100%; margin-top: 8px; font-size: 12px; }
+  th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .table-wrap { overflow-x: auto; }
+
+  #tooltip {
+    position: fixed; pointer-events: none; z-index: 10; display: none;
+    background: var(--surface); color: var(--text-primary);
+    border: 1px solid var(--border); border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+    padding: 8px 10px; font-size: 12px; min-width: 180px;
+  }
+  #tooltip .tt-title { color: var(--text-secondary); margin-bottom: 4px; }
+  #tooltip .tt-delta { font-size: 16px; font-weight: 650; }
+  #tooltip .tt-row { display: flex; justify-content: space-between; gap: 16px; }
+  #tooltip .tt-row strong { font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<main>
+  <h1 id="title">fio comparison</h1>
+  <p class="sub" id="subtitle"></p>
+  <p class="muted" id="meta"></p>
+
+  <div class="controls">
+    <label><input type="checkbox" id="all-metrics"> Show all metrics (p50, MiB/s)</label>
+    <div class="legend">
+      <span><i class="swatch" style="background: var(--worse)"></i>A worse</span>
+      <span><i class="swatch" style="background: var(--better)"></i>A better</span>
+      <span><i class="swatch" style="background: var(--neutral)"></i>Within &plusmn;5&nbsp;% (noise)</span>
+    </div>
+  </div>
+
+  <div class="tiles" id="tiles"></div>
+  <div id="workloads"></div>
+</main>
+<div id="tooltip" role="status"></div>
+
+<script>
+/*@DATA@*/
+
+// Noise threshold in percent; same value as the verdict in run.sh
+const NOISE = 5;
+
+const METRICS = {
+  r_p50_us:     { label: "read p50",   unit: "us",    kind: "lat", extra: true },
+  r_p99_us:     { label: "read p99",   unit: "us",    kind: "lat" },
+  w_p50_us:     { label: "write p50",  unit: "us",    kind: "lat", extra: true },
+  w_p99_us:     { label: "write p99",  unit: "us",    kind: "lat" },
+  fsync_p50_us: { label: "fsync p50",  unit: "us",    kind: "lat", extra: true },
+  fsync_p99_us: { label: "fsync p99",  unit: "us",    kind: "lat" },
+  r_iops:       { label: "read IOPS",  unit: "IOPS",  kind: "thr" },
+  w_iops:       { label: "write IOPS", unit: "IOPS",  kind: "thr" },
+  r_MiBs:       { label: "read MiB/s", unit: "MiB/s", kind: "thr", extra: true },
+  w_MiBs:       { label: "write MiB/s",unit: "MiB/s", kind: "thr", extra: true },
+};
+
+// Headline numbers from disk-baseline: the cost of synchronous replication shows here first
+const TILES = [
+  { job: "qd1-write-4k-fdatasync", metric: "w_p99_us", title: "QD1 write p99 (with fdatasync)" },
+  { job: "qd1-randread-4k",        metric: "r_p99_us", title: "QD1 read p99" },
+  { job: "qd32-randwrite-4k",      metric: "w_iops",   title: "QD32 random write IOPS" },
+  { job: "seq-write-1m",           metric: "w_MiBs",   title: "Sequential write MiB/s" },
+];
+
+const lines = TSV.trim().split("\n").map(l => l.split("\t"));
+const header = lines.shift();
+const LABEL_A = header[3], LABEL_B = header[4];
+const rows = lines.filter(r => r.length >= 5 && METRICS[r[2]]).map(r => {
+  const a = Number(r[3]), b = Number(r[4]);
+  const m = METRICS[r[2]];
+  const d = b > 0 ? (a - b) / b * 100 : null;
+  let verdict = "noise";
+  if (d === null) verdict = "n/a";
+  else if (Math.abs(d) >= NOISE) {
+    const aWorse = m.kind === "lat" ? d > 0 : d < 0;
+    verdict = aWorse ? "worse" : "better";
+  }
+  return { workload: r[0], job: r[1], metric: r[2], a, b, d, verdict };
+});
+
+const fmtNum = v => {
+  if (v === null || isNaN(v)) return "-";
+  if (Math.abs(v) >= 1000) return Math.round(v).toLocaleString("en-US");
+  if (Math.abs(v) >= 100) return v.toFixed(0);
+  return String(Math.round(v * 10) / 10);
+};
+const fmtVal = (v, unit) => unit === "us" ? fmtUs(v) : `${fmtNum(v)} ${unit}`;
+const fmtUs = v => v >= 1000 ? `${fmtNum(v / 1000)} ms` : `${fmtNum(v)} µs`;
+const fmtDelta = d => d === null ? "-" : `${d > 0 ? "+" : d < 0 ? "−" : ""}${Math.abs(Math.round(d))} %`;
+const verdictText = v => ({ worse: "A worse", better: "A better", noise: "within noise", "n/a": "no reference" })[v];
+const verdictColor = v => ({ worse: "var(--worse)", better: "var(--better)" })[v] || "var(--neutral)";
+
+function el(tag, attrs = {}, text) {
+  const svgTags = ["svg", "g", "rect", "path", "line", "text"];
+  const e = svgTags.includes(tag)
+    ? document.createElementNS("http://www.w3.org/2000/svg", tag)
+    : document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+
+// ---------- header ----------
+document.getElementById("title").textContent = `fio comparison: ${LABEL_A} vs ${LABEL_B}`;
+document.getElementById("subtitle").textContent =
+  `A = ${LABEL_A}, B = ${LABEL_B}. Delta = (A − B) / B. Bars within ±${NOISE} % are treated as noise.`;
+const metaLine = META.split("\n").find(l => l.startsWith("fio=")) || "";
+document.getElementById("meta").textContent = metaLine.replace(/ /g, " · ");
+
+// ---------- tiles ----------
+const tilesEl = document.getElementById("tiles");
+for (const t of TILES) {
+  const r = rows.find(x => x.job === t.job && x.metric === t.metric);
+  if (!r) continue;
+  const unit = METRICS[r.metric].unit;
+  const tile = el("div", { class: "tile" });
+  tile.append(el("div", { class: "label" }, t.title));
+  const delta = el("div", { class: "delta" });
+  const sw = el("i", { class: "swatch" });
+  sw.style.background = verdictColor(r.verdict);
+  delta.append(sw, document.createTextNode(fmtDelta(r.d)));
+  tile.append(delta);
+  tile.append(el("div", { class: "values" },
+    `${verdictText(r.verdict)} · ${LABEL_A}: ${fmtVal(r.a, unit)} · ${LABEL_B}: ${fmtVal(r.b, unit)}`));
+  tilesEl.append(tile);
+}
+if (!tilesEl.children.length) tilesEl.remove();
+
+// ---------- tooltip ----------
+const tip = document.getElementById("tooltip");
+function showTip(r, x, y) {
+  const unit = METRICS[r.metric].unit;
+  tip.replaceChildren();
+  tip.append(el("div", { class: "tt-title" }, `${r.job} · ${METRICS[r.metric].label}`));
+  tip.append(el("div", { class: "tt-delta" }, `${fmtDelta(r.d)} · ${verdictText(r.verdict)}`));
+  for (const [name, v] of [[LABEL_A, r.a], [LABEL_B, r.b]]) {
+    const row = el("div", { class: "tt-row" });
+    row.append(el("span", {}, name), el("strong", {}, fmtVal(v, unit)));
+    tip.append(row);
+  }
+  tip.style.display = "block";
+  const w = tip.offsetWidth, h = tip.offsetHeight;
+  tip.style.left = Math.min(x + 14, window.innerWidth - w - 8) + "px";
+  tip.style.top = Math.min(y + 14, window.innerHeight - h - 8) + "px";
+}
+const hideTip = () => { tip.style.display = "none"; };
+
+// ---------- charts ----------
+function niceMax(v) {
+  const steps = [10, 20, 25, 50, 100, 200, 250, 500, 1000];
+  return steps.find(s => s >= v) || Math.ceil(v / 1000) * 1000;
+}
+
+function drawChart(container, data, title, note, D) {
+  const box = el("div", { class: "chart" });
+  box.append(el("h3", {}, title), el("div", { class: "muted" }, note));
+  container.append(box);
+  if (!data.length) { box.append(el("p", { class: "empty" }, "No data for this view.")); return; }
+
+  const width = Math.max(320, box.clientWidth);
+  const labelW = Math.min(250, Math.round(width * 0.42));
+  const rowH = 26, barH = 14, top = 8, axisH = 24;
+  const plotL = labelW + 8, plotR = width - 8;
+  const x = v => plotL + (v + D) / (2 * D) * (plotR - plotL);
+  const height = top + data.length * rowH + axisH;
+
+  const svg = el("svg", { viewBox: `0 0 ${width} ${height}`, height, role: "img",
+                          "aria-label": `${title}: delta in percent per job and metric` });
+  // noise band and grid
+  svg.append(el("rect", { x: x(-NOISE), y: top, width: x(NOISE) - x(-NOISE),
+                          height: data.length * rowH, fill: "var(--noise-band)" }));
+  for (const t of [-D, -D / 2, 0, D / 2, D]) {
+    svg.append(el("line", { x1: x(t), x2: x(t), y1: top, y2: top + data.length * rowH,
+                            stroke: t === 0 ? "var(--axis)" : "var(--grid)", "stroke-width": 1 }));
+    svg.append(el("text", { x: x(t), y: height - 6, "text-anchor": "middle", class: "axis-text" },
+                  t === 0 ? "0 %" : `${t > 0 ? "+" : "−"}${Math.abs(t)} %`));
+  }
+
+  data.forEach((r, i) => {
+    const y = top + i * rowH;
+    const g = el("g", { class: "row" });
+    g.append(el("text", { x: labelW, y: y + rowH / 2 + 4, "text-anchor": "end", class: "row-text" },
+                `${r.job} · ${METRICS[r.metric].label}`));
+    if (r.d !== null) {
+      const x0 = x(0), x1 = x(r.d);
+      const len = Math.abs(x1 - x0);
+      const rad = Math.min(4, len);
+      const by = y + (rowH - barH) / 2;
+      // Square at the baseline, 4px rounded at the data end
+      const dir = x1 >= x0 ? 1 : -1;
+      const xe = x0 + dir * len;
+      // A delta of exactly 0 still gets a small neutral tick, so the row does not look empty
+      const p = len < 2 ? `M${x0 - 1},${by} h2 v${barH} h-2 Z` :
+        `M${x0},${by} H${xe - dir * rad} Q${xe},${by} ${xe},${by + rad} ` +
+        `V${by + barH - rad} Q${xe},${by + barH} ${xe - dir * rad},${by + barH} H${x0} Z`;
+      if (p) g.append(el("path", { d: p, class: "bar", fill: verdictColor(r.verdict) }));
+      if (r.verdict === "worse" || r.verdict === "better") {
+        g.append(el("text", { x: xe + dir * 5, y: y + rowH / 2 + 4,
+                              "text-anchor": dir > 0 ? "start" : "end", class: "value-text" }, fmtDelta(r.d)));
+      }
+    }
+    const hit = el("rect", { x: 0, y, width, height: rowH, class: "hit", tabindex: 0,
+                             "aria-label": `${r.job} ${METRICS[r.metric].label}: ${fmtDelta(r.d)}, ${verdictText(r.verdict)}` });
+    hit.addEventListener("pointermove", e => showTip(r, e.clientX, e.clientY));
+    hit.addEventListener("pointerleave", hideTip);
+    hit.addEventListener("focus", () => { const b = hit.getBoundingClientRect(); showTip(r, b.left + labelW, b.top); });
+    hit.addEventListener("blur", hideTip);
+    g.append(hit);
+    svg.append(g);
+  });
+  box.append(svg);
+}
+
+function drawTable(container, data) {
+  const det = el("details");
+  det.append(el("summary", {}, "Table view (all metrics)"));
+  const wrap = el("div", { class: "table-wrap" });
+  const table = el("table");
+  const head = el("tr");
+  for (const [h, num] of [["job"], ["metric"], [LABEL_A, 1], [LABEL_B, 1], ["delta", 1], ["verdict"]])
+    head.append(el("th", num ? { class: "num" } : {}, h));
+  table.append(head);
+  for (const r of data) {
+    const unit = METRICS[r.metric].unit;
+    const tr = el("tr");
+    tr.append(el("td", {}, r.job), el("td", {}, METRICS[r.metric].label),
+              el("td", { class: "num" }, fmtVal(r.a, unit)), el("td", { class: "num" }, fmtVal(r.b, unit)),
+              el("td", { class: "num" }, fmtDelta(r.d)), el("td", {}, verdictText(r.verdict)));
+    table.append(tr);
+  }
+  wrap.append(table);
+  det.append(wrap);
+  container.append(det);
+}
+
+const allBox = document.getElementById("all-metrics");
+try { allBox.checked = localStorage.getItem("fio-report-all") === "1"; } catch (e) {}
+
+function render() {
+  hideTip();
+  const root = document.getElementById("workloads");
+  root.replaceChildren();
+  const showAll = allBox.checked;
+  const workloads = [...new Set(rows.map(r => r.workload))];
+  for (const w of workloads) {
+    const wr = rows.filter(r => r.workload === w);
+    const shown = wr.filter(r => showAll || !METRICS[r.metric].extra);
+    // One scale for both charts of a workload, so bar lengths are comparable;
+    // 18 % headroom so the value labels at the bar tips fit inside the plot
+    const D = niceMax(Math.max(NOISE * 2, ...shown.map(r => Math.abs(r.d || 0))) * 1.18);
+    const sec = el("section", { class: "workload" });
+    sec.append(el("h2", {}, w));
+    root.append(sec);
+    drawChart(sec, shown.filter(r => METRICS[r.metric].kind === "lat"),
+              "Latency", "Bar to the right = A has higher latency (worse).", D);
+    drawChart(sec, shown.filter(r => METRICS[r.metric].kind === "thr"),
+              "Throughput", "Bar to the left = A has lower throughput (worse). Rate-limited jobs stay near 0 %.", D);
+    drawTable(sec, wr);
+  }
+}
+
+allBox.addEventListener("change", () => {
+  try { localStorage.setItem("fio-report-all", allBox.checked ? "1" : "0"); } catch (e) {}
+  render();
+});
+let resizeTimer;
+window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(render, 150); });
+render();
+</script>
+</body>
+</html>

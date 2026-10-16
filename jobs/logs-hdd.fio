@@ -1,0 +1,104 @@
+; Log disk on HDD
+; Model: several applications append buffered to their own log files
+; (file_append, no preallocation -> realistic fragmentation), an audit/server
+; log with fsync per write, logrotate reads old logs sequentially and writes
+; them back compressed. Several sequential streams look like random I/O on an
+; HDD - which is exactly the interesting effect.
+;
+; Phase 1: baseline (seq write 1M, random read 4k) as a sanity check
+; Phase 2: realistic mixed load
+
+[global]
+directory=${TEST_DIR}
+ioengine=psync
+time_based=1
+runtime=${RUNTIME}
+ramp_time=${RAMP}
+group_reporting=1
+lat_percentiles=1
+percentile_list=50:90:99:99.9
+randrepeat=0
+
+; ---------- Phase 1 ----------
+; Write the whole file once before measuring. Otherwise fio only fallocates it for
+; the first (write) job, and reads of never-written ranges return zeros without
+; touching the disk (seen: 2 us read p50 instead of 64 us). Not a measurement;
+; run.sh drops jobs named "precondition" from the results.
+[precondition]
+filename=hdd_baseline.dat
+size=${LOG_ARCHIVE_SIZE}
+direct=1
+ioengine=libaio
+iodepth=8
+rw=write
+bs=1m
+time_based=0
+runtime=0
+ramp_time=0
+
+[hdd-baseline-seqwrite]
+stonewall
+filename=hdd_baseline.dat
+size=${LOG_ARCHIVE_SIZE}
+rw=write
+bs=1m
+direct=1
+
+[hdd-baseline-randread]
+stonewall
+filename=hdd_baseline.dat
+size=${LOG_ARCHIVE_SIZE}
+rw=randread
+bs=4k
+direct=1
+norandommap=1
+
+; ---------- Phase 2 ----------
+; 8 application log streams, 4 MiB/s each, periodic fsync
+[app-log-streams]
+stonewall
+new_group
+size=${LOG_FILE_SIZE}
+rw=write
+bssplit=4k/50:16k/30:64k/20
+direct=0
+file_append=1
+fallocate=none
+fsync=256
+numjobs=8
+rate=4m
+
+; Audit/DB server log: small writes with fsync per write
+[audit-log-sync]
+new_group
+filename=audit.log
+size=1g
+rw=write
+bs=4k
+direct=0
+file_append=1
+fallocate=none
+fdatasync=1
+rate_iops=100
+
+; logrotate/archiving: read old logs ...
+[logrotate-read]
+new_group
+filename=hdd_baseline.dat
+size=${LOG_ARCHIVE_SIZE}
+rw=read
+bs=1m
+direct=1
+rate=40m
+
+; ... and write them compressed
+[logrotate-write-gz]
+new_group
+filename=archive.gz
+size=${LOG_FILE_SIZE}
+rw=write
+bs=1m
+direct=0
+fallocate=none
+end_fsync=1
+rate=6m
