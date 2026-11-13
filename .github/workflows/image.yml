@@ -134,7 +134,7 @@ jobs:
           retention-days: 1
 
       # No floating v4 tag exists, only exact versions; Dependabot bumps it
-      - uses: sigstore/cosign-installer@v4.1.2
+      - uses: sigstore/cosign-installer@v4.1.3
         if: github.event_name != 'pull_request'
 
       - name: Sign image (keyless)
